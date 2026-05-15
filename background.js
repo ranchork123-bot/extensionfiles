@@ -1008,6 +1008,16 @@ async function handleMessage(request, sendResponse) {
     return;
   }
 
+  async function getFreshSnapshotForAction(tabId) {
+    const snap = await execInTab(tabId, async () => {
+      if (typeof window.__omni_snapshot__ === "function") return await window.__omni_snapshot__();
+      return { snapshot: "", index: [], body: "", url: location.href, title: document.title };
+    });
+    _lastSnapshotIndex = snap?.index || [];
+    _lastSnapshotUrl   = snap?.url || _lastSnapshotUrl;
+    return _lastSnapshotIndex;
+  }
+
   // ── FIX 7: VERIFY PAGE ───────────────────────────────────────────
   // Checks auth + optionally verifies expected keywords present
   if (action === "verify_page") {
@@ -1050,7 +1060,8 @@ async function handleMessage(request, sendResponse) {
     const { tabId } = await getOrCreateTab();
     if (!tabId) { sendResponse({ success: false, error: "No active tab" }); return; }
 
-    const targetRef = resolveRef(request.label || request.target_id, _lastSnapshotIndex);
+    const freshIndex = await getFreshSnapshotForAction(tabId);
+    const targetRef = resolveRef(request.label || request.target_id, freshIndex);
 
     const result = await execInTab(tabId,
       (ref, snapshotIndex) => {
@@ -1070,7 +1081,7 @@ async function handleMessage(request, sendResponse) {
         }
         return window.__omni_act__("click", ref, null, snapshotIndex);
       },
-      [targetRef, _lastSnapshotIndex]
+      [targetRef, freshIndex]
     );
 
     sendResponse(result || { success: false, error: "Script failed" });
@@ -1082,7 +1093,8 @@ async function handleMessage(request, sendResponse) {
     const { tabId } = await getOrCreateTab();
     if (!tabId) { sendResponse({ success: false, error: "No active tab" }); return; }
 
-    const targetRef = resolveRef(request.label || request.target_id, _lastSnapshotIndex);
+    const freshIndex = await getFreshSnapshotForAction(tabId);
+    const targetRef = resolveRef(request.label || request.target_id, freshIndex);
 
     const result = await execInTab(tabId,
       async (ref, value, snapshotIndex) => {
@@ -1099,7 +1111,7 @@ async function handleMessage(request, sendResponse) {
         }
         return window.__omni_act__("type", ref, value, snapshotIndex);
       },
-      [targetRef, request.value || "", _lastSnapshotIndex]
+      [targetRef, request.value || "", freshIndex]
     );
 
     sendResponse(result || { success: false, error: "Script failed" });
@@ -1111,7 +1123,8 @@ async function handleMessage(request, sendResponse) {
     const { tabId } = await getOrCreateTab();
     if (!tabId) { sendResponse({ success: false, error: "No active tab" }); return; }
 
-    const targetRef = resolveRef(request.label || request.target_id, _lastSnapshotIndex);
+    const freshIndex = await getFreshSnapshotForAction(tabId);
+    const targetRef = resolveRef(request.label || request.target_id, freshIndex);
 
     const dispatchResult = await execInTab(tabId,
       (ref, snapshotIndex) => {
@@ -1128,7 +1141,7 @@ async function handleMessage(request, sendResponse) {
         }
         return { success: true, method: "fallback_active_element" };
       },
-      [targetRef, _lastSnapshotIndex]
+      [targetRef, freshIndex]
     );
 
     if (!dispatchResult?.success) {
@@ -1924,4 +1937,3 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 
 // Run on startup for tabs already open
 injectExtIdIntoConnectedTabs();
-

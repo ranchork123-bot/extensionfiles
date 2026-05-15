@@ -1,7 +1,7 @@
 // agent-planner.js — Hubtique OS v13.1 — PLANNING & MEMORY BRAIN
 // ─────────────────────────────────────────────────────────────────────
 // FIXES vs v13.0:
-//  ✅ FIX-TYPEFOCUS-v13.1 — EXECUTION_PROMPT rule 10 added:
+//  ✅ FIX-TYPEFOCUS-v13.1 — EXECUTION_PROMPT rule 11 added:
 //             Agent must click/focus any input field BEFORE calling type.
 //             Root cause of "type lands nowhere" bug — text was typed
 //             without focus so it went to the void. Correct sequence is
@@ -432,18 +432,19 @@ RULES — READ BEFORE EVERY STEP:
 5. Use LABEL not target_id. Example: {{"action":"type","label":"To recipients","value":"x@y.com"}}
 6. If same action has appeared in memory.actions_done → pick a DIFFERENT action. Never repeat a failed action.
 7. DONE value = complete answer including all collected data. Not "task complete".
-8. Add "thought": one sentence explaining your reasoning. Add "confidence": 0-100.
-9. If confidence < 40 → human-handoff.
-10. TYPING RULE — CRITICAL: Before typing into ANY input field, you MUST click it first to give it focus.
+8. If read_body already returned page text containing the answer, extract it directly and output DONE immediately. Do NOT click table cells or navigate again.
+9. Add "thought": one sentence explaining your reasoning. Add "confidence": 0-100.
+10. If confidence < 40 → human-handoff.
+11. TYPING RULE — CRITICAL: Before typing into ANY input field, you MUST click it first to give it focus.
     Correct sequence: click(field label) → type(field label, value) → click(submit button)
     NEVER call type on a field you have not clicked first. Text typed without focus lands nowhere.
     Example for a search box: first {{"action":"click","label":"Search"}} then {{"action":"type","label":"Search","value":"your query"}}
-11. ADAPTIVE INTELLIGENCE: You are like a human with a browser. If something is blocked, slow, or broken:
+12. ADAPTIVE INTELLIGENCE: You are like a human with a browser. If something is blocked, slow, or broken:
     - Search Google for an alternative approach
     - Try a different website that does the same thing
     - Use a different action sequence
     - NEVER loop the same failed action more than once
-12. URL RULE — CRITICAL: When you need to navigate to a website, look it up in
+13. URL RULE — CRITICAL: When you need to navigate to a website, look it up in
     CANONICAL SITE URLS above and copy the URL exactly.
     NEVER construct URLs from site names — this causes hallucinations like "amazonsite.com".
     If the site is not in the list, use: https://www.{exact-domain-from-task-text}
