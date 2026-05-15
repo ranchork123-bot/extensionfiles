@@ -979,12 +979,27 @@ async function readBodyStep(step, ctx) {
       title: document.title,
     };
   });
-  console.log(`[EXEC] └─ ✅ read_body (${body?.body?.length || 0} chars)`);
+  const bodyText = body?.body || '';
+  const lowSignalPatterns = [
+    /skip to main content/i,
+    /keyboard shortcuts/i,
+    /search alt\s*\+\s*\//i,
+  ];
+  const signalPatterns = [/\$\s?\d+[.,]\d{2}/, /sony\s+wh-1000xm5/i, /best buy|amazon/i];
+  const lowSignalRead = lowSignalPatterns.filter(r => r.test(bodyText)).length >= 2 &&
+    signalPatterns.every(r => !r.test(bodyText));
+  if (lowSignalRead) {
+    ctx._low_signal_read_body_count = (ctx._low_signal_read_body_count || 0) + 1;
+  } else {
+    ctx._low_signal_read_body_count = 0;
+  }
+  console.log(`[EXEC] └─ ✅ read_body (${bodyText.length} chars)${lowSignalRead ? ' [LOW_SIGNAL]' : ''}`);
   return {
-    body: body?.body || '',
+    body: bodyText,
     url:  body?.url  || '',
     title: body?.title || '',
-    saved: { page_body: body?.body || '', page_url: body?.url || '', page_title: body?.title || '' },
+    low_signal_read_body: lowSignalRead,
+    saved: { page_body: bodyText, page_url: body?.url || '', page_title: body?.title || '', low_signal_read_body: lowSignalRead },
   };
 }
 
@@ -1027,7 +1042,12 @@ async function clickStep(step, ctx) {
 // step.value supports {varName} substitution from context.
 async function typeStep(step, ctx) {
   const label = replaceVariables(step.label || '', ctx);
-  const value = replaceVariables(step.value || '', ctx);
+  let value = replaceVariables(step.value || '', ctx);
+  const requiredQuery = ctx.required_query || ctx.collected?.required_query || ctx.goal_query;
+  if (requiredQuery && /search/i.test(label) && value && value.trim() !== requiredQuery.trim()) {
+    console.warn(`[EXEC] typeStep query drift prevented: "${value}" -> "${requiredQuery}"`);
+    value = requiredQuery;
+  }
   console.log(`[EXEC] ┌─ type "${label}" = "${value.substring(0, 60)}${value.length > 60 ? '…' : ''}"`);
 
   // Always refresh snapshot before typing — same stale registry risk as clickStep.
