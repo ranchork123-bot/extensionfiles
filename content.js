@@ -305,8 +305,15 @@
   }
 
   // ── FIX 4 — Semantic label fallback (3-pass) ─────────────────────
+  function normalizeMatchLabel(text) {
+    let raw = String(text || '');
+    raw = raw.replace(/\s*[\(\[]\s*(?:Alt|Ctrl|Shift|Cmd|Meta|⌘|⌥)[^)\]]*[\)\]]/gi, '').trim();
+    raw = raw.replace(/\s*,\s*(alt|ctrl|shift|forward slash|backspace|enter|escape)[^,]*/gi, '').trim();
+    return raw.toLowerCase().replace(/\s+/g, ' ').trim();
+  }
+
   function findBySemanticLabel(role, label) {
-    const needle = label.toLowerCase().replace(/\s+/g, ' ').trim();
+    const needle = normalizeMatchLabel(label);
     let pool;
 
     if (role === 'input') {
@@ -326,8 +333,14 @@
       // getLabel() (used at snapshot-build time) already strips these, but
       // elLabel() was reading aria-label raw — so "Search Amazon (Alt+/)"
       // never matched the snapshot label "Search Amazon". Now they agree.
-      let raw = (
+      const raw = (
         el.getAttribute('aria-label') ||
+        (() => {
+          const id = el.getAttribute('id');
+          if (!id) return '';
+          const lbl = document.querySelector(`label[for="${CSS.escape(id)}"]`);
+          return lbl?.innerText || '';
+        })() ||
         el.getAttribute('placeholder') ||
         el.getAttribute('data-testid') ||
         el.getAttribute('name') ||
@@ -335,9 +348,7 @@
         el.innerText ||
         el.getAttribute('value') || ''
       );
-      raw = raw.replace(/\s*[\(\[]\s*(?:Alt|Ctrl|Shift|Cmd|Meta|⌘|⌥)[^)\]]*[\)\]]/gi, '').trim();
-      raw = raw.replace(/\s*,\s*(alt|ctrl|shift|forward slash|backspace|enter|escape)[^,]*/gi, '').trim();
-      return raw.toLowerCase().replace(/\s+/g, ' ').trim();
+      return normalizeMatchLabel(raw);
     }
 
     for (const el of pool) { if (!isVisible(el)) continue; if (elLabel(el) === needle) return el; }
@@ -349,58 +360,82 @@
   // ── ACTION EXECUTOR ────────────────────────────────────────────
   window.__omni_act__ = function (action, ref, value, snapshotIndex) {
     function findEl(r) {
+      const attempts = [];
       const item = (snapshotIndex || []).find(i => i.ref === r);
-      if (!item) return null;
+      if (!item) return { el: null, reason: 'REF_NOT_IN_SNAPSHOT', attempts };
+      attempts.push('snapshot_ref');
 
       // Check live registry first (FIX-C1 benefit: el is already known)
       if (window.__omni_registry__?.[r]?.el) {
-        return window.__omni_registry__[r].el;
+        const regEl = window.__omni_registry__[r].el;
+        if (regEl?.isConnected) return { el: regEl, reason: null, attempts: [...attempts, 'live_registry'] };
+        attempts.push('live_registry_stale');
       }
 
       if (item.xpath.startsWith('//*[@id=')) {
+        attempts.push('id_lookup');
         const idMatch = item.xpath.match(/\[@id="([^"]+)"\]/);
         if (idMatch) {
           const el = document.getElementById(idMatch[1]);
-          if (el) return el;
+          if (el?.isConnected) return { el, reason: null, attempts };
         }
       }
 
       try {
+        attempts.push('xpath_eval');
         const result = document.evaluate(
           item.xpath, document, null,
           XPathResult.FIRST_ORDERED_NODE_TYPE, null
         );
         if (result.singleNodeValue && isVisible(result.singleNodeValue)) {
-          return result.singleNodeValue;
+          return { el: result.singleNodeValue, reason: null, attempts };
         }
       } catch (_) {}
 
-      return findBySemanticLabel(item.role, item.label);
+      attempts.push('semantic_label');
+      const semantic = findBySemanticLabel(item.role, item.label);
+      if (semantic) return { el: semantic, reason: null, attempts };
+      return { el: null, reason: 'LABEL_RESOLUTION_FAILED', attempts };
     }
 
-    const el = findEl(ref);
+    const resolved = findEl(ref);
+    const el = resolved.el;
 
     // ── CLICK ──────────────────────────────────────────────────────
     if (action === 'click') {
-      if (!el) return { success: false, error: `"${ref}" not found for click` };
+      if (!el) return { success: false, code: 'ELEMENT_NOT_FOUND', reason: resolved.reason, attempts: resolved.attempts, error: `"${ref}" not found for click` };
       el.scrollIntoView({ behavior: 'smooth', block: 'center' });
       return new Promise(res => setTimeout(() => {
+        if (!el.isConnected) {
+          res({ success: false, code: 'ELEMENT_STALE', reason: 'ELEMENT_DISCONNECTED_BEFORE_CLICK', attempts: resolved.attempts, error: `"${ref}" became stale before click` });
+          return;
+        }
         const rect    = el.getBoundingClientRect();
+        if (!isVisible(el) || (rect.width === 0 && rect.height === 0)) {
+          res({ success: false, code: 'ELEMENT_NOT_VISIBLE', reason: 'NOT_VISIBLE_FOR_CLICK', attempts: resolved.attempts, error: `"${ref}" not visible for click` });
+          return;
+        }
         const centerX = rect.left + rect.width  / 2;
         const centerY = rect.top  + rect.height / 2;
         const eventOpts = { bubbles: true, cancelable: true, clientX: centerX, clientY: centerY, screenX: centerX, screenY: centerY };
-        el.dispatchEvent(new MouseEvent('mouseover',  eventOpts));
-        el.dispatchEvent(new MouseEvent('mouseenter', eventOpts));
-        el.dispatchEvent(new MouseEvent('mousedown',  eventOpts));
-        el.click();
-        el.dispatchEvent(new MouseEvent('mouseup',    eventOpts));
-        res({ success: true });
+        try {
+          el.dispatchEvent(new PointerEvent('pointerdown', eventOpts));
+          el.dispatchEvent(new MouseEvent('mouseover',  eventOpts));
+          el.dispatchEvent(new MouseEvent('mouseenter', eventOpts));
+          el.dispatchEvent(new MouseEvent('mousedown',  eventOpts));
+          el.click();
+          el.dispatchEvent(new MouseEvent('mouseup',    eventOpts));
+          el.dispatchEvent(new PointerEvent('pointerup', eventOpts));
+          res({ success: true });
+        } catch (e) {
+          res({ success: false, code: 'CLICK_FAILED', reason: 'DIRECT_CLICK_THROW', attempts: resolved.attempts, error: `click failed: ${e.message}` });
+        }
       }, 60 + Math.random() * 100));
     }
 
     // ── TYPE ───────────────────────────────────────────────────────
     if (action === 'type') {
-      if (!el) return { success: false, error: `"${ref}" not found for type` };
+      if (!el) return { success: false, code: 'ELEMENT_NOT_FOUND', reason: resolved.reason, attempts: resolved.attempts, error: `"${ref}" not found for type` };
       el.scrollIntoView({ behavior: 'smooth', block: 'center' });
       el.focus();
       return (async () => {
@@ -440,14 +475,23 @@
 
     // ── SUBMIT ─────────────────────────────────────────────────────
     if (action === 'submit') {
-      if (!el) return { success: false, error: `"${ref}" not found for submit` };
-      el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true, cancelable: true }));
-      el.dispatchEvent(new KeyboardEvent('keyup',   { key: 'Enter', keyCode: 13, bubbles: true }));
-      if (el.form) {
-        try { el.form.requestSubmit(); } catch (_) {
-          el.form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      if (!el) return { success: false, code: 'ELEMENT_NOT_FOUND', reason: resolved.reason, attempts: resolved.attempts, error: `"${ref}" not found for submit` };
+      const form = el.closest('form') || el.form || null;
+      if (form) {
+        try {
+          form.requestSubmit?.();
+          return { success: true };
+        } catch (_) {
+          form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+          return { success: true };
         }
       }
+      const submitBtn = findBySemanticLabel('button', 'submit') || findBySemanticLabel('button', 'search');
+      if (submitBtn) {
+        try { submitBtn.click(); return { success: true }; } catch (_) {}
+      }
+      el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true, cancelable: true }));
+      el.dispatchEvent(new KeyboardEvent('keyup',   { key: 'Enter', keyCode: 13, bubbles: true }));
       return { success: true };
     }
 
