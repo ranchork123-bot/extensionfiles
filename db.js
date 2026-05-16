@@ -139,7 +139,7 @@ export async function createTask(def) {
     definition:            def,
     attempt_count:         0,
     current_step_index:    0,
-    provider_rotation:     def.providers || ["groq", "cerebras", "openrouter", "google", "sambanova", "pollinations"],
+    provider_rotation:     def.providers || ["groq", "cerebras", "openrouter", "google", "sambanova", "nvidia", "github", "pollinations"],
     current_provider_index: 0,
     next_retry_time:       null,
     last_error:            null,
