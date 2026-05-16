@@ -1866,6 +1866,10 @@ async function handleMessage(request, sendResponse) {
 // ─────────────────────────────────────────────────────────────────────
 function resolveRef(labelOrRef, snapshotIndex) {
   if (!labelOrRef) return "@e1";
+  // Accept composite refs emitted by some planner paths, e.g.
+  // "@e2 [button] Search" or "@e1 [input] Search Amazon".
+  const embeddedRef = String(labelOrRef).match(/@e\d+/);
+  if (embeddedRef) return embeddedRef[0];
   if (/^@e\d+$/.test(labelOrRef)) return labelOrRef;
 
   const staleMatch = labelOrRef.match(/^(INPUT|BUTTON|LINK|SELECT|FILE)_(\d+)$/);
