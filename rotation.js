@@ -20,13 +20,15 @@ import * as DB from "./db.js";
 const FETCH_TIMEOUT_MS = 12_000;
 const DB_TIMEOUT_MS    =  2_000;
 
-// ── Free provider configs ─────────────────────────────────────────
+// ── Free provider configs (Total free calls/day: 143,299; non-Pollinations subtotal: 43,300) ──
 export const PROVIDERS = {
-  groq:        { name: "Groq",         daily: 14400, endpoint: "https://api.groq.com/openai/v1/chat/completions",                         model: "llama-3.3-70b-versatile" },
+  groq:        { name: "Groq",         daily: 14400, endpoint: "https://api.groq.com/openai/v1/chat/completions",                         model: "llama-4-maverick-17b-128e-instruct" },
   cerebras:    { name: "Cerebras",     daily: 10000, endpoint: "https://api.cerebras.ai/v1/chat/completions",                             model: "llama3.1-8b" },            // FIX-R7
   sambanova:   { name: "SambaNova",    daily: 5000,  endpoint: "https://api.sambanova.ai/v1/chat/completions",                            model: "Meta-Llama-3.3-70B-Instruct" },
   openrouter:  { name: "OpenRouter",   daily: 5400,  endpoint: "https://openrouter.ai/api/v1/chat/completions",                           model: "meta-llama/llama-3.3-70b-instruct:free" },
   google:      { name: "Google AI",    daily: 1500,  endpoint: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", model: "gemini-2.0-flash" },
+  nvidia:      { name: "NVIDIA NIM",   daily: 2000,  endpoint: "https://integrate.api.nvidia.com/v1/chat/completions",                  model: "deepseek-ai/deepseek-r1" },
+  github:      { name: "GitHub Models",daily: 5000,  endpoint: "https://models.inference.ai.azure.com/chat/completions",                model: "deepseek/deepseek-r1" },
   pollinations:{ name: "Pollinations", daily: 99999, endpoint: "https://text.pollinations.ai/v1/chat/completions",                        model: "openai-large", apiKeyRequired: false }, // FIX-R8+R9
 };
 

@@ -979,12 +979,27 @@ async function readBodyStep(step, ctx) {
       title: document.title,
     };
   });
-  console.log(`[EXEC] └─ ✅ read_body (${body?.body?.length || 0} chars)`);
+  const bodyText = body?.body || '';
+  const lowSignalPatterns = [
+    /skip to main content/i,
+    /keyboard shortcuts/i,
+    /search alt\s*\+\s*\//i,
+  ];
+  const signalPatterns = [/\$\s?\d+[.,]\d{2}/, /sony\s+wh-1000xm5/i, /best buy|amazon/i];
+  const lowSignalRead = lowSignalPatterns.filter(r => r.test(bodyText)).length >= 2 &&
+    signalPatterns.every(r => !r.test(bodyText));
+  if (lowSignalRead) {
+    ctx._low_signal_read_body_count = (ctx._low_signal_read_body_count || 0) + 1;
+  } else {
+    ctx._low_signal_read_body_count = 0;
+  }
+  console.log(`[EXEC] └─ ✅ read_body (${bodyText.length} chars)${lowSignalRead ? ' [LOW_SIGNAL]' : ''}`);
   return {
-    body: body?.body || '',
+    body: bodyText,
     url:  body?.url  || '',
     title: body?.title || '',
-    saved: { page_body: body?.body || '', page_url: body?.url || '', page_title: body?.title || '' },
+    low_signal_read_body: lowSignalRead,
+    saved: { page_body: bodyText, page_url: body?.url || '', page_title: body?.title || '', low_signal_read_body: lowSignalRead },
   };
 }
 
@@ -1027,7 +1042,12 @@ async function clickStep(step, ctx) {
 // step.value supports {varName} substitution from context.
 async function typeStep(step, ctx) {
   const label = replaceVariables(step.label || '', ctx);
-  const value = replaceVariables(step.value || '', ctx);
+  let value = replaceVariables(step.value || '', ctx);
+  const requiredQuery = ctx.required_query || ctx.collected?.required_query || ctx.goal_query;
+  if (requiredQuery && /search/i.test(label) && value && value.trim() !== requiredQuery.trim()) {
+    console.warn(`[EXEC] typeStep query drift prevented: "${value}" -> "${requiredQuery}"`);
+    value = requiredQuery;
+  }
   console.log(`[EXEC] ┌─ type "${label}" = "${value.substring(0, 60)}${value.length > 60 ? '…' : ''}"`);
 
   // Always refresh snapshot before typing — same stale registry risk as clickStep.
@@ -1156,8 +1176,10 @@ export async function executePlan(taskId, plan) {
   await chrome.storage.local.remove('activeAgentTabId');
   console.log('[EXEC] 🔄 Cleared stale tab ID — fresh tab will be created on first navigate');
 
-  const ctx = { _taskId: taskId };
+  const ctx = { _taskId: taskId, smart_mode: true, goal_state: { amazon_price: false, bestbuy_price: false, analysis: false, report_url: false } };
   const results = [];
+  let consecutiveElementFailures = 0;
+  let consecutiveLowSignalReads = 0;
 
   for (let i = 0; i < plan.steps.length; i++) {
     const step = plan.steps[i];
@@ -1219,6 +1241,14 @@ export async function executePlan(taskId, plan) {
       Object.assign(ctx, stepResult.saved);
     }
 
+    // Smart-mode goal progress tracking
+    const bodyText = String(stepResult?.body || stepResult?.text || '').toLowerCase();
+    const urlText  = String(ctx.current_url || stepResult?.url || '').toLowerCase();
+    if (/\$\s?\d+[.,]\d{2}/.test(bodyText) && urlText.includes('amazon.')) ctx.goal_state.amazon_price = true;
+    if (/\$\s?\d+[.,]\d{2}/.test(bodyText) && urlText.includes('bestbuy.')) ctx.goal_state.bestbuy_price = true;
+    if ((ctx.llm_result || '').toLowerCase().includes('recommend')) ctx.goal_state.analysis = true;
+    if (/https?:\/\/justpaste\.it\//i.test(String(ctx.llm_result || '') + ' ' + String(stepResult?.value || ''))) ctx.goal_state.report_url = true;
+
     // Propagate commonly-named outputs for subsequent steps
     if (stepResult?.body)  ctx.page_body  = stepResult.body;
     if (stepResult?.text)  ctx.llm_result = stepResult.text;
@@ -1232,8 +1262,35 @@ export async function executePlan(taskId, plan) {
 
     // If step failed all retries, stop the plan
     if (stepError) {
+      const msg = String(stepError.message || '');
+      if (/ELEMENT_NOT_FOUND|ELEMENT_STALE|ELEMENT_NOT_VISIBLE|not found for (click|type|submit)/i.test(msg)) {
+        consecutiveElementFailures++;
+      } else {
+        consecutiveElementFailures = 0;
+      }
+      if (consecutiveElementFailures >= 2) {
+        console.warn('[EXEC] 🧠 Smart-mode recovery: forcing snapshot refresh after repeated element failures');
+        try {
+          const recover = await getSnapshotStep({ action: 'getSnapshot' }, ctx);
+          if (recover?.saved) Object.assign(ctx, recover.saved);
+        } catch (_) {}
+      }
       console.error(`[EXEC] ✖ Step ${label} failed after ${maxAttempts} attempts — stopping plan`);
       break;
+    }
+
+    // Smart-mode low-signal guard: avoid blind read_body loops
+    if (action === 'read_body' && stepResult?.low_signal_read_body) {
+      consecutiveLowSignalReads++;
+      if (consecutiveLowSignalReads >= 2) {
+        console.warn('[EXEC] 🧠 Smart-mode recovery: read_body low-signal twice, forcing snapshot refresh');
+        try {
+          const recover = await getSnapshotStep({ action: 'getSnapshot' }, ctx);
+          if (recover?.saved) Object.assign(ctx, recover.saved);
+        } catch (_) {}
+      }
+    } else if (action === 'read_body') {
+      consecutiveLowSignalReads = 0;
     }
 
     // DONE step reached successfully — no more steps needed
